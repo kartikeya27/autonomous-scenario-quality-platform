@@ -1,0 +1,60 @@
+name: Scenario Quality CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-smoke:
+    name: Tests and local demo smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: '1'
+      SCENARIO_SIGNING_KEY: ${{ secrets.SCENARIO_SIGNING_KEY || 'ci-only-test-signing-key-not-for-production' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run automated tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Generate synthetic scenarios
+        run: python -m scenario_quality init --db /tmp/scenario-quality-ci.db --count 100
+
+      - name: Generate quality summary
+        run: python -m scenario_quality report --db /tmp/scenario-quality-ci.db
+
+      - name: Simulate additional execution batch
+        run: python -m scenario_quality run --db /tmp/scenario-quality-ci.db --batch ci-regression --seed 42
+
+      - name: Report quality trends and meta-quality
+        run: |
+          python -m scenario_quality trends --db /tmp/scenario-quality-ci.db
+          python -m scenario_quality meta --db /tmp/scenario-quality-ci.db
+
+      - name: Evaluate statistical sampling plans
+        run: |
+          python -m scenario_quality aql-plan --count 100 --n 30 --c 2 --aql 0.01 --lq 0.10
+          python -m scenario_quality design-ci --db /tmp/scenario-quality-ci.db --n 30 --seed 42
+
+      - name: Create and validate signed replay artifact
+        run: |
+          python -m scenario_quality replay --db /tmp/scenario-quality-ci.db --scenario-id 1
+          python -m scenario_quality verify-artifact --db /tmp/scenario-quality-ci.db --artifact-id 1
+
+      - name: Run small synthetic load test
+        run: python -m scenario_quality loadtest --db /tmp/scenario-quality-benchmark-ci.db --count 50 --workers 2
+
